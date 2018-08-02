@@ -10,7 +10,7 @@ therefore, a coeffcient (Kdec) is proposed to reduce the simulated yield (i.e. K
 
 Refer to: http://dx.doi.org/10.1016/j.fcr.2017.07.022
 
-# Goal of this code:
+# Goal of this code
 Read growers yield historical series and compute Kdec
 
 # Usage
