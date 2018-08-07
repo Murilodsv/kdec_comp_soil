@@ -948,7 +948,8 @@ y_data_out$dssat_canegro_output_corr[y_data_out$cut>0] = y_data_out$dssat_canegr
 png(paste("DSSAT_CANEGRO_KDEC_Performance_",grower,".png",sep = ""),units="in",width=10,height=10,pointsize=20,res=300)
 par(mfrow=c(1,1), mar = c(4.5, 4.5, 0.5, 0.5), oma = c(0, 0, 0, 0))
 
-overall_perf = mperf(sim = y_data_out$dssat_canegro_output_corr, obs = y_data_out$measured_data, vnam = "DSSAT/CANEGRO-KDEC (t ha-1)", dchart = T, outidx = c("rmse","r2","d"))  
+overall_perf = mperf(sim = y_data_out$dssat_canegro_output_corr, obs = y_data_out$measured_data, vnam = "DSSAT/CANEGRO-KDEC (t ha-1)", dchart = T, outidx = c("bias","mse","rmse","mae","rrmse","rmae","ef","r","r2","d"))
+
 legend("topleft",
        inset = 0.02,
        legend = c(paste0("RMSE = ",round(overall_perf$rmse[1], digits = 2), " t ha-1"),
