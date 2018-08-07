@@ -676,8 +676,11 @@ for(grower in l_grower){
     d_link = gsub("<WTH_ID>"    ,wth,d_link)
     
     #--- download directly on Weather directory
+    message("-------------------------------------------------------")
+    message("---------- Downloading WTH data from Stomry------------")
     download.file(url = d_link, destfile = paste0("C:/DSSAT",ds_v,"/",crop,"/",wth_nm,".WTH"))
     message(paste("Download of",wth_nm,"WTH file is completed."))
+    message("-------------------------------------------------------")
     
     #--- separate by type of soil
     l_soil = unique(y_data$DSSAT_Soil[y_data$site==grower & y_data$WTH_code==wth])
