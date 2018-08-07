@@ -959,13 +959,5 @@ dev.off()
 
 write.csv(overall_perf, file = paste0(wd,"/","Performance_dssc_kdec.csv"))
 write.csv(y_data_out,file = "Yield_data_sccan_out.csv")
-message("Outputs are saved on file Yield_data_sccan_out.csv")
-message("------------------------------------------")
-message("Optimization and evaluation of kdec ended:")
-message(paste0("Grower - ",grower))
-message(paste0("kdec: ",round(kdec_opt_df$kdec_opt,digits = 2)))
-message("Please check working directory for outputs")
-message("------------------------------------------")
-
-
+message("Simulations are Done! Please check working directory for outputs.")
   
