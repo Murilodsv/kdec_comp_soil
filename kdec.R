@@ -29,19 +29,38 @@ sim_start_bf  = 6 * 30
 y_csvfile     = "y_data.csv"
 opt_per_cv    = F # optmize per cultivar
 check_soil    = T
-slope         = 5.1
+match_soil    = T
+match_w       = 2 #Set 1 for texture and 2 for production environment provided by the grower
+slope         = 5.1 #--- this value comes from a Geotiff DEM database (Topodata/INPE)
 slro_fln      = "SLRO.csv"
 delete_xfiles = T #--- delete all created xfiles in the end?
 #--------------------------------------------#
 
 setwd(wd)
+
+#--- Installing missing packages
+pkg = c("BAMMtools")
+ipkg = pkg %in% rownames(installed.packages())
+sapply(pkg[!ipkg],function(x) install.packages(x))
+
+#--- Load installed packages
+library(BAMMtools)
 source("kdec_f.R")
 source("dssat_sol_f.R")
 
 #--- reading yield data provided by growers
 y_data_db  = read.csv(y_csvfile)
 
-y_data_p = y_data_db[y_data_db$cut==0,]
+y_data_p = y_data_db[y_data_db$cut==0,] #plant cane
+y_data_r = y_data_db[y_data_db$cut>0,]  #ratooned cane
+
+#--- check among all soil database file "soil_db_fln" which one of those soils best match with plant-cane observations
+#------ this is recommended when the soil profile data is not available
+#------ Goal: compare observed yield of planted cane with yield simulations from all soils within the "soil_db_fln" database;
+#------       rank all soils based on lower absolute deviation from obsserved data
+#------       filter the rank by texture OR production environment provided by the grower
+#------       select the 1st soil in the filtered rank
+if(check_soil){
 
 slro        = read.csv(slro_fln)
 soil_db     = readLines(soil_db_fln)
@@ -77,7 +96,10 @@ for(i in 1:length(soil_db)){
 }
 
 l_soil_db = unique(soil_ID[soil_ID != "SOILS: DSS"])
-
+s_type = data.frame(s = l_soil_db,
+                    t = 0,
+                    tav = 0,
+                    penv= "")
 
 for(s in l_soil_db){
   
@@ -189,6 +211,24 @@ for(s in l_soil_db){
     message(paste0("Albedo value set to maximun of 0.95 in soil: ",s))
   }
   
+  #--- soil type (based on texture)
+  if(any(ly_data$slcl>0)){
+    if(mean(ly_data$slcl[ly_data$slcl>0]) > 35){
+      s_type$t[s_type$s==s] = 3
+    }else if(mean(ly_data$slcl[ly_data$slcl>0]) <= 35 & mean(ly_data$slcl[ly_data$slcl>0]) > 15){
+      s_type$t[s_type$s==s] = 2
+    }else if(mean(ly_data$slcl[ly_data$slcl>0]) <= 15){
+      s_type$t[s_type$s==s] = 1
+    }
+  }else{
+    #--- none (-99)
+    #--- assumed as type 2
+    s_type$t[s_type$s==s] = 2
+    message(paste0("None texture values (-99) were informed for soil: ",s,". Soil type assumed as 2."))
+  }
+  
+  #--- Compute TAV
+  s_type$tav[s_type$s==s] = sum(ly_data$sdul - ly_data$slll)
   
   soil_dssat = ds_sol(soil_id,
                       max_dp,
@@ -229,9 +269,35 @@ for(s in l_soil_db){
   }
 }
 
+s_type$penv = as.character(s_type$penv)
+#--- check distribution of data
+bp = boxplot(s_type$tav, plot = F)
+
+#--- Classify TAV with same number of classes of the Environment production system from IAC:
+#--- Refer to: https://www.ipni.net/ppiweb/brazil.nsf/87cb8a98bf72572b8525693e0053ea70/7759ddc6878ca7eb83256d05004c6dd1/$FILE/Enc12-17-110.pdf (last table)
+#------ ADA : High TAV
+#------ ADM : Medium TAV
+#------ ADB : Low TAV
+#------ ADMB: Very Low TAV
+
+penv_class = data.frame(id = c(4,3,2,1),
+                        tav= c("ADA","ADM","ADB","ADMB"))
+
+jenks = getJenksBreaks(s_type$tav[s_type$tav>=bp$stats[1] & s_type$tav<=bp$stats[5]], 5)
+jenks[jenks == min(jenks)] = min(jenks) - 0.001
+jenks[jenks == max(jenks)] = max(jenks) + 0.001
+
+jenk_class = data.frame(id   =c(1,2,3,4),
+                        jmin = jenks[1:4],
+                        jmax = jenks[2:5])
+#--- classify by penv
+for(i in jenk_class$id){
+  s_type$penv[s_type$tav>= jenk_class$jmin[jenk_class$id==i] & s_type$tav < jenk_class$jmax[jenk_class$id==i]] = as.character(penv_class$tav[penv_class$id==i])
+}
+#--- tag outliers
+s_type$penv[s_type$tav<bp$stats[1] | s_type$tav>bp$stats[5]] = "Outlier"
+
 write(file_sol_dssat,file = paste0("C:/DSSAT", ds_v, "/Soil/",new_soil_fln))
-
-
 #----------------------------------------------------------------------------------------
 
 y_data = y_data_p
@@ -257,7 +323,7 @@ for(grower in l_grower){
     #--- formating WTH file name
     nyear     = sprintf("%02.0f", (as.numeric(format(end_date_wth,"%Y")) - as.numeric(format(init_date_wth,"%Y")) + 1))
     init_year = substr(format(init_date_wth,"%Y"),3,4)
-    wth_nm    = paste0(wth_code,init_year,nyear)
+    wth_nm    = paste0(wth_code)
     
     #--- mean lat/lon (because some fields can use the same WTH by being close together)
     lat = mean(y_data$lat[y_data$site==grower & y_data$WTH_code==wth])
@@ -290,7 +356,21 @@ for(grower in l_grower){
         #--- create a single xfile for each observation
         for(obs in 1:length(fy_data$cut)){
           
-          l_soil_db_c = paste0(substr(new_soil_fln,1,2),substr(l_soil_db,3,10))
+          if(match_soil){
+            if(match_w==1){
+              #--- use texture
+              l_soil_db_r = s_type$s[s_type$t == fy_data$Soil_Type_Shp[obs]]
+            }else if(match_w==2){
+              #--- use production environment classification based on TAV
+              l_soil_db_r = s_type$s[s_type$penv== fy_data$TAV_IAC[obs]]
+            }else{
+              stop(paste0("Please select a valid matching technique. (match_w =",math_w,")"))
+            }
+          }else{
+            l_soil_db_r = l_soil_db
+          }
+          
+          l_soil_db_c = paste0(substr(new_soil_fln,1,2),substr(l_soil_db_r,3,10))
           
           it = 1
           for(s in l_soil_db_c){
@@ -447,18 +527,28 @@ for(grower in l_grower){
             #--- use mperf here for a more general code
           }
           
+          fy_data$doy_planting[obs]
+          
           #--- sort soils by best performance
           perf = perf[order(perf$adev),]
           
           #--- gather performance for soils
           if(obs ==1){
             rank_soil = perf[1:25,c("soil","adev")]
+            bm_soil   = data.frame(s_id = as.character(perf$soil[1]),
+                                   cultivar_name_dssat = cultivar,
+                                   grower   = grower,
+                                   field    = fy_data$field[obs])
           }else{
             rank_soil = cbind(rank_soil,perf[1:25,c("soil","adev")])
+            bm_soil   = rbind(bm_soil,data.frame(s_id = as.character(perf$soil[1]),
+                                   cultivar_name_dssat = cultivar,
+                                   grower   = grower,
+                                   field    = fy_data$field[obs]))
           }
           
-          colnames(rank_soil)[length(rank_soil)-1]  = paste(grower,substr(cultivar,1,8),format(pl_date,"%Y_%m"),"soilID",sep="_")
-          colnames(rank_soil)[length(rank_soil)]    = paste(grower,substr(cultivar,1,8),format(pl_date,"%Y_%m"),"adev",sep="_")
+          colnames(rank_soil)[length(rank_soil)-1]  = paste(grower,cultivar,format(pl_date,"%Y_%m"),"soilID",sep="_")
+          colnames(rank_soil)[length(rank_soil)]    = paste(grower,cultivar,format(pl_date,"%Y_%m"),"adev",sep="_")
         }
         
         #--- gather data by cultivar
@@ -466,9 +556,11 @@ for(grower in l_grower){
         if(cultivar == l_cultivar[1]){
           fy_out_cv = fy_out
           rank_soil_cv = rank_soil
+          bm_soil_cv   = bm_soil
         }else{
           fy_out_cv = rbind(fy_out_cv,fy_out)
           rank_soil_cv = cbind(rank_soil_cv,rank_soil)
+          bm_soil_cv   = rbind(bm_soil_cv,bm_soil)
         }
       }
       #--- gather data by soil
@@ -476,9 +568,11 @@ for(grower in l_grower){
       if(soil == l_soil[1]){
         fy_out_cv_sl = fy_out_cv
         rank_soil_cvs= rank_soil_cv
+        bm_soil_cv_s = bm_soil_cv
       }else{
         fy_out_cv_sl = rbind(fy_out_cv_sl,fy_out_cv)
         rank_soil_cvs= cbind(rank_soil_cvs,rank_soil_cv)
+        bm_soil_cv_s   = rbind(bm_soil_cv_s,bm_soil_cv)
       }
     }
     
@@ -487,9 +581,11 @@ for(grower in l_grower){
     if(wth == l_wth[1]){
       fy_out_cv_sl_wth = fy_out_cv_sl
       rank_soil_cvswth = rank_soil_cvs
+      bm_soil_cv_s_wth = bm_soil_cv_s
     }else{
       fy_out_cv_sl_wth = rbind(fy_out_cv_sl_wth,fy_out_cv_sl)
       rank_soil_cvswth = cbind(rank_soil_cvswth,rank_soil_cvs)
+      bm_soil_cv_s_wth = rbind(bm_soil_cv_s_wth,bm_soil_cv_s)
     }
   }
   
@@ -498,9 +594,11 @@ for(grower in l_grower){
   if(grower == l_grower[1]){
     fy_out_grower = fy_out_cv_sl_wth
     rank_soil_all = rank_soil_cvswth
+    bm_soil_all = bm_soil_cv_s_wth
   }else{
     fy_out_grower = rbind(fy_out_grower,fy_out_cv_sl_wth)
     rank_soil_all = cbind(rank_soil_all,rank_soil_cvswth)
+    bm_soil_all   = rbind(bm_soil_all,bm_soil_cv_s_wth)
   }
 }
 
@@ -510,29 +608,32 @@ if(delete_xfiles){
 
 write.csv(rank_soil_all,file = paste0(wd,"/soil_rank.csv"),row.names = F)
 
-#----------------------------------------------------------------------------------------
+#--- all data
+y_data = y_data_db
 
+y_data$DSSAT_Soil = as.character(y_data$DSSAT_Soil)
 
+#--- merge with corresponding field soil data (the best match soil - bm_soil_all)
+fd_l = unique(bm_soil_all$field)
+for(fd in fd_l){
+  y_data$DSSAT_Soil[y_data$field==fd] = as.character(bm_soil_all$s_id[bm_soil_all$field==fd])
+}
 
+#--- If a given field do not have plant cane values, use the same soil based on cultivar
+#--- i.e. uses the same soil (best match) used for the same cultivar in other fields
+if(!all(y_data$field %in% fd_l)){
+  l_cv = unique(y_data[!(y_data$field %in% fd_l),"cultivar_name_dssat"])
+  for(cv in l_cv){
+    y_data$DSSAT_Soil[!(y_data$field %in% fd_l) & y_data$cultivar_name_dssat==cv] = as.character(bm_soil_all$s_id[bm_soil_all$cultivar_name_dssat==cv][1])
+  }
+}
 
+#--- end of check soil
+}else{
+  y_data = y_data_db #--- use the provided dssat soil ID in the y_data_db file
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#--- run the model for all ratoon data
 #--- Separate data by Grower
 l_grower = unique(y_data$site)
 for(grower in l_grower){
@@ -554,7 +655,7 @@ for(grower in l_grower){
     #--- formating WTH file name
     nyear     = sprintf("%02.0f", (as.numeric(format(end_date_wth,"%Y")) - as.numeric(format(init_date_wth,"%Y")) + 1))
     init_year = substr(format(init_date_wth,"%Y"),3,4)
-    wth_nm    = paste0(wth_code,init_year,nyear)
+    wth_nm    = paste0(wth_code)
     
     #--- mean lat/lon (because some fields can use the same WTH by being close together)
     lat = mean(y_data$lat[y_data$site==grower & y_data$WTH_code==wth])
@@ -568,7 +669,7 @@ for(grower in l_grower){
     d_link = gsub("<WTH_ID>"    ,wth,d_link)
     
     #--- download directly on Weather directory
-    download.file(url = d_link, destfile = paste0("C:/DSSAT",ds_v,"/Weather/",wth_nm,".WTH"))
+    download.file(url = d_link, destfile = paste0("C:/DSSAT",ds_v,"/",crop,"/",wth_nm,".WTH"))
     message(paste("Download of",wth_nm,"WTH file is completed."))
     
     #--- separate by type of soil
@@ -761,11 +862,10 @@ message("Joining with observed data")
 colnames(fy_out_grower) = c("unique_run_id","dssat_output","dssat_canegro_output")
 y_data_out = merge(y_data,fy_out_grower, by = c("unique_run_id","dssat_output"))
 
-write.csv(y_data_out,file = "Yield_data_sccan_out.csv")
-message("Outputs are saved on file Yield_data_sccan_out.csv")
-
+#--- compute "observed" Sugarcane Yield Decline
 y_data_out$dec = y_data_out$measured_data / y_data_out$dssat_canegro_output
 
+#--- use only declines and data from ratoonning
 if(length(y_data_out$dec[y_data_out$dec>1&y_data_out$cut>0])>0){
   
   message(paste0(length(y_data_out$dec[y_data_out$dec>1&y_data_out$cut>0]),
@@ -819,8 +919,49 @@ for(grower in l_grower_kdec){
     kdec_opt_df = rbind(kdec_opt_df,kdec_opt_df)
   }
 }
+
 if(!opt_per_cv){kdec_opt_df$cultivar= NULL}
 
-plot(f_kdec(seq(1,5),kdec_opt_df$kdec_opt)~seq(1,5),type = "l",ylim = c(0,1))
-points(dec_data_all$dec~dec_data_all$cut)
+setwd(wd)
 
+png(paste("kdec_optmized_",grower,".png",sep = ""),units="in",width=10,height=10,pointsize=20,res=300)
+par(mfrow=c(1,1), mar = c(4.5, 4.5, 0.5, 0.5), oma = c(0, 0, 0, 0))
+
+plot(f_kdec(seq(1,5,by=0.1),kdec_opt_df$kdec_opt)~seq(1,5,by = 0.1),
+     type = "l",
+     ylim = c(0,1),
+     ylab = "Relative Sugarcane Yield Decline (0-1)",
+     xlab = "Number of Cuts")
+points(dec_data_all$dec~dec_data_all$cut)
+legend("bottomleft",  inset = 0.01, legend = paste0("Optimized kdec = ",round(kdec_opt_df$kdec_opt, digits = 2)), bg = "lightblue")
+dev.off()
+
+
+#--- apply kdec and evaluate prediction
+y_data_out$dssat_canegro_output_corr = y_data_out$dssat_canegro_output
+y_data_out$dssat_canegro_output_corr[y_data_out$cut>0] = y_data_out$dssat_canegro_output[y_data_out$cut>0] * f_kdec(y_data_out$cut[y_data_out$cut>0],kdec_opt_df$kdec_opt)
+
+png(paste("DSSAT_CANEGRO_KDEC_Performance_",grower,".png",sep = ""),units="in",width=10,height=10,pointsize=20,res=300)
+par(mfrow=c(1,1), mar = c(4.5, 4.5, 0.5, 0.5), oma = c(0, 0, 0, 0))
+
+overall_perf = mperf(sim = y_data_out$dssat_canegro_output_corr, obs = y_data_out$measured_data, vnam = "DSSAT/CANEGRO-KDEC (t ha-1)", dchart = T, outidx = c("rmse","r2","d"))  
+legend("topleft",
+       inset = 0.02,
+       legend = c(paste0("RMSE = ",round(overall_perf$rmse[1], digits = 2), " t ha-1"),
+                  paste0("r2 = "  ,round(overall_perf$r2[1], digits = 2)),
+                  paste0("d = ",round(overall_perf$d[1], digits = 2))),
+       bg = "grey")
+dev.off()
+
+write.csv(overall_perf, file = paste0(wd,"/","Performance_dssc_kdec.csv"))
+write.csv(y_data_out,file = "Yield_data_sccan_out.csv")
+message("Outputs are saved on file Yield_data_sccan_out.csv")
+message("------------------------------------------")
+message("Optimization and evaluation of kdec ended:")
+message(paste0("Grower - ",grower))
+message(paste0("kdec: ",round(kdec_opt_df$kdec_opt,digits = 2)))
+message("Please check working directory for outputs")
+message("------------------------------------------")
+
+
+  
