@@ -628,7 +628,11 @@ if(!all(y_data$field %in% fd_l)){
   }
 }
 
-#--- end of check soil
+write.csv(y_data, file = paste0(wd,"/","y_data_check_soil.csv"))
+#--------------------------
+#--- end of check soil ----
+#--------------------------
+
 }else{
   y_data = y_data_db #--- use the provided dssat soil ID in the y_data_db file
 }
